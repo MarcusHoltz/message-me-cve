@@ -112,9 +112,10 @@ Each run:
   that one fetch.
 - Commits its state (CVEs sent, open failures, NVD position) to
   `state/<name>.json` when it changed. Any run where NVD was read moves
-  the NVD position, so that is nearly every run. A run that changed
-  nothing (NVD still down, nothing sent) makes no commit; its table is
-  on the run page. A new profile gets its state file on its first run.
+  the NVD position and poll time, so that is every run where NVD was due.
+  A run that changed nothing (NVD not due or still down, nothing sent)
+  makes no commit; its table is on the run page. A new profile gets its
+  state file on its first run.
 - Names the profiles that sent alerts or failed in the commit subject,
   e.g. `message-me-cve: sent example.com (2); failed example-project`, or
   `message-me-cve: nothing sent`. The commit body has one line per
@@ -135,34 +136,43 @@ Each run:
   New KEV and New NVD are matches not sent before. Not sent means
   delivery failed; those are tried again next run.
 
-Cost: 6 runs a day of 1 to 1.5 minutes each. GitHub rounds each job up
-to the whole minute, so 180-360 billed minutes a month. GitHub Free
+Cost: 11 runs a day. About 6 read NVD (1 to 1.5 minutes each), the rest
+check KEV only (under 1 minute). GitHub rounds each job up to the whole
+minute, so about 330-510 billed minutes a month. GitHub Free
 includes $12 of Actions a month on private repos, 2000 Linux minutes.
 Public repos are free.
 
 
 ### Schedule
 
-Every 2 hours from 12:xx to 22:xx UTC, 6 runs a day, none at night.
-That is 05:xx to 15:xx MST in winter and 06:xx to 16:xx MDT in summer.
+Every hour from 12:xx to 22:xx UTC, 11 runs a day, none at night (if
+GitHub starts them on time, see below). That is 05:xx to 15:xx MST in
+winter and 06:xx to 16:xx MDT in summer. NVD is read at most every 2
+hours; KEV on every run.
 
-- **Why UTC:** the workflow's `timezone` key (GitHub Public Preview)
-  produced zero scheduled runs on this repo. Plain UTC cron replaced it.
-
+- **Why UTC:** plain cron is GA; the workflow `timezone` key is GitHub
+  Public Preview. Note: UTC did not fix the missing runs (see Late runs).
 - **Why 2 hours:** NVD asks clients to poll for changes "no more than once
-  every two hours", from a single requestor. Manual runs count too.
-- **The minute:** `xx` is a random prime between 2 and 59. Every run uses
-  the same minute, so runs stay exactly 2 hours apart. GitHub delays
+  every two hours", from a single requestor. Manual runs count too. The
+  program enforces it: each state file records `nvd_polled`, and a run
+  that starts under 2 hours after the latest one skips NVD (status
+  `ok, NVD not due`) and leaves the NVD position alone, so the next due
+  run covers the gap. Runs in any order, at any spacing, stay within the
+  rule.
+- **Why hourly:** more chances for GitHub to start a run. Late, dropped,
+  or bunched runs cost nothing, since NVD is gated and the NVD position
+  only moves when it is read.
+- **The minute:** `xx` is a random prime between 2 and 59. GitHub delays
   scheduled runs under high load, which includes the start of every hour.
 - **New minute:** run `./schedule.sh`, then commit the workflow. Do not edit
   the cron line by hand.
-- **Late or dropped runs:** GitHub may start scheduled runs late (minutes,
-  sometimes more), and under high load may drop them. A late run can
-  shorten one gap below 2 hours.
+- **Late runs:** observed 2026-11-19 on this account: scheduled runs start
+  6 to 10 hours late on every repo checked (ipblocklist, resume-generator,
+  and the old vulnwatch repo). This repo had no scheduled run at all in its
+  first 17 hours. Nothing in the YAML or repo settings changes that.
 - **Other hours:** edit `cron` in `.github/workflows/message-me-cve.yml`.
-  Hours are UTC. Keep the runs 2 hours apart. `schedule.sh` only
-  recognizes the hour list `12,14,16,18,20,22`; change it too, or it stops
-  with `cron line not found`.
+  Hours are UTC. `schedule.sh` only recognizes the hour field `12-22`;
+  change it too, or it stops with `cron line not found`.
 
 The workflow times out after 80 minutes. That leaves room for one 60
 minute round of NVD retries (see [How a run works](#how-a-run-works)).
@@ -324,7 +334,8 @@ What gets sent:
 
 1. Fetch CISA KEV, from CISA's GitHub mirror, falling back to cisa.gov.
 2. Fetch every CVE NVD changed since the last successful run. The first
-   run looks back 7 days.
+   run looks back 7 days. Skipped when any profile polled NVD less than
+   2 hours ago (`nvd_polled`); the next due run covers the gap.
 3. For each profile, send:
    - KEV entries matching a watch word, as ACT NOW.
    - NVD CVEs that are critical or high, published in the last 90 days,

@@ -48,6 +48,7 @@ const (
 	userAgent     = "Mozilla/5.0 (compatible; message-me-cve)"
 	nvdMaxWindow  = 119 * 24 * time.Hour // NVD rejects date ranges over 120 days
 	nvdFirstRun   = 7 * 24 * time.Hour
+	nvdMinGap     = 2 * time.Hour       // NVD: poll for changes no more than once every two hours
 	nvdMaxAge     = 90 * 24 * time.Hour // older CVEs re-modified by NVD are not news
 	nvdTimeFormat = "2006-01-02T15:04:05.000Z"
 	maxSingle     = 5    // more new alerts than this in one run: send a combined list
@@ -75,7 +76,9 @@ type config struct {
 type state struct {
 	Sent     map[string]string `json:"sent"`
 	NVDSince string            `json:"nvd_since"`
-	Broken   map[string]string `json:"broken"`
+	// NVDPolled is when NVD was last requested, successful or not.
+	NVDPolled string            `json:"nvd_polled,omitempty"`
+	Broken    map[string]string `json:"broken"`
 }
 
 type alert struct {
@@ -155,6 +158,9 @@ type fetched struct {
 	kevErr error
 	nvd    []nvdCVE
 	nvdErr error
+	// nvdSkipped: NVD was polled less than nvdMinGap ago, so this run did
+	// not request it. Its window and broken state are left as they are.
+	nvdSkipped bool
 
 	// CVE.org lookups, cached for the run (failures too): profiles that
 	// watch the same word would otherwise fetch the same record again.
@@ -210,7 +216,15 @@ func runAll(cfgs []config) bool {
 			}
 		}
 	}
-	f := fetchFeeds(cfgs[0], since, now)
+	var f *fetched
+	if last := lastNVDPoll(states, stErrs); nvdNotDue(last, now) {
+		fmt.Printf("NVD not due: last polled %s, next poll from %s\n",
+			last.Format(time.RFC3339), last.Add(nvdMinGap).Format(time.RFC3339))
+		f = &fetched{now: now, nvdSkipped: true}
+		f.kev, f.kevErr = fetchKEV()
+	} else {
+		f = fetchFeeds(cfgs[0], since, now)
+	}
 	ok := true
 	var reps []report
 	for i, c := range cfgs {
@@ -297,6 +311,28 @@ func commitMessage(reps []report) string {
 	return subject + "\n\n" + strings.Join(body, "\n") + "\n"
 }
 
+// lastNVDPoll returns the latest NVD request time across profiles, zero if
+// none is recorded.
+func lastNVDPoll(states []*state, stErrs []error) time.Time {
+	var last time.Time
+	for i, st := range states {
+		if stErrs[i] != nil {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, st.NVDPolled); err == nil && t.After(last) {
+			last = t
+		}
+	}
+	return last
+}
+
+// nvdNotDue reports whether NVD was polled less than nvdMinGap before now.
+// A poll time in the future is treated as bad data, not as recent.
+func nvdNotDue(last, now time.Time) bool {
+	d := now.Sub(last)
+	return !last.IsZero() && d >= 0 && d < nvdMinGap
+}
+
 func nvdSince(st *state, now time.Time) time.Time {
 	if t, err := time.Parse(time.RFC3339, st.NVDSince); err == nil {
 		return t
@@ -365,6 +401,9 @@ func runOnce(cfg config, st *state, stErr error, f *fetched) report {
 		}
 	}
 	status := "ok"
+	if f.nvdSkipped {
+		status = "ok, NVD not due"
+	}
 	if runErr != nil {
 		status = runErr.Error()
 	}
@@ -426,56 +465,61 @@ func run(cfg config, st *state, f *fetched, rep *report) error {
 	trackBroken(cfg, st, "CISA KEV", kevErr)
 
 	// NVD. The shared fetch starts at the oldest profile's window, so it
-	// covers this one; CVEs this profile already sent are skipped.
-	var cveOrgErr error
-	nvdErr := func() error {
-		if f.nvdErr != nil {
-			return f.nvdErr
-		}
-		var alerts []alert
-		for _, c := range f.nvd {
-			if st.Sent["nvd:"+c.ID] != "" || st.Sent["kev:"+c.ID] != "" {
-				continue
+	// covers this one; CVEs this profile already sent are skipped. Not due
+	// (polled under nvdMinGap ago): nothing below runs, the window is kept,
+	// and the next due run covers it.
+	if !f.nvdSkipped {
+		st.NVDPolled = now.Format(time.RFC3339)
+		var cveOrgErr error
+		nvdErr := func() error {
+			if f.nvdErr != nil {
+				return f.nvdErr
 			}
-			if sev, _ := c.severity(); sev != "CRITICAL" && sev != "HIGH" {
-				continue
+			var alerts []alert
+			for _, c := range f.nvd {
+				if st.Sent["nvd:"+c.ID] != "" || st.Sent["kev:"+c.ID] != "" {
+					continue
+				}
+				if sev, _ := c.severity(); sev != "CRITICAL" && sev != "HIGH" {
+					continue
+				}
+				// Unparseable date: keep the CVE rather than drop it silently.
+				if p, err := time.Parse("2006-01-02T15:04:05", c.Published); err == nil && now.Sub(p) > nvdMaxAge {
+					continue
+				}
+				w, confirmed, err := nvdMatch(c, words, f.affected)
+				if err != nil {
+					// A CVE.org failure only blocks the CVE that needed it; the
+					// window is kept below so that CVE is retried next run.
+					cveOrgErr = err
+					continue
+				}
+				if w != "" {
+					alerts = append(alerts, nvdAlert(c, w, confirmed))
+				}
 			}
-			// Unparseable date: keep the CVE rather than drop it silently.
-			if p, err := time.Parse("2006-01-02T15:04:05", c.Published); err == nil && now.Sub(p) > nvdMaxAge {
-				continue
+			alerts = dedupe(alerts)
+			rep.nvdNew = len(alerts)
+			if !deliver(cfg, st, alerts, "New CRITICAL/HIGH CVEs", now) {
+				undelivered = true
+				return nil // undelivered alerts stay unsent; keep the window so they retry
 			}
-			w, confirmed, err := nvdMatch(c, words, f.affected)
-			if err != nil {
-				// A CVE.org failure only blocks the CVE that needed it; the
-				// window is kept below so that CVE is retried next run.
-				cveOrgErr = err
-				continue
+			if cveOrgErr == nil {
+				st.NVDSince = now.Format(time.RFC3339)
 			}
-			if w != "" {
-				alerts = append(alerts, nvdAlert(c, w, confirmed))
+			return nil
+		}()
+		if nvdErr != nil {
+			down = append(down, nvdErr)
+		}
+		trackBroken(cfg, st, "NVD", nvdErr)
+		// Without NVD data no CVE.org lookup ran, so its state is unknown.
+		if nvdErr == nil {
+			if cveOrgErr != nil {
+				down = append(down, cveOrgErr)
 			}
+			trackBroken(cfg, st, "CVE.org", cveOrgErr)
 		}
-		alerts = dedupe(alerts)
-		rep.nvdNew = len(alerts)
-		if !deliver(cfg, st, alerts, "New CRITICAL/HIGH CVEs", now) {
-			undelivered = true
-			return nil // undelivered alerts stay unsent; keep the window so they retry
-		}
-		if cveOrgErr == nil {
-			st.NVDSince = now.Format(time.RFC3339)
-		}
-		return nil
-	}()
-	if nvdErr != nil {
-		down = append(down, nvdErr)
-	}
-	trackBroken(cfg, st, "NVD", nvdErr)
-	// Without NVD data no CVE.org lookup ran, so its state is unknown.
-	if nvdErr == nil {
-		if cveOrgErr != nil {
-			down = append(down, cveOrgErr)
-		}
-		trackBroken(cfg, st, "CVE.org", cveOrgErr)
 	}
 
 	if undelivered {

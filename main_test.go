@@ -350,6 +350,83 @@ func TestRunCVEOrgOutage(t *testing.T) {
 	}
 }
 
+// NVD is polled at most every nvdMinGap: zero and future poll times count as
+// due, so missing or bad state never blocks NVD.
+func TestNVDNotDue(t *testing.T) {
+	now := time.Date(2026, 11, 19, 14, 41, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		last time.Time
+		want bool
+	}{
+		{time.Time{}, false},
+		{now.Add(-time.Hour), true},
+		{now.Add(-nvdMinGap + time.Second), true},
+		{now.Add(-nvdMinGap), false},
+		{now.Add(-9 * time.Hour), false},
+		{now.Add(time.Hour), false},
+	} {
+		if got := nvdNotDue(tc.last, now); got != tc.want {
+			t.Errorf("nvdNotDue(%s) = %v, want %v", tc.last, got, tc.want)
+		}
+	}
+}
+
+func TestLastNVDPoll(t *testing.T) {
+	states := []*state{
+		{NVDPolled: "2026-11-19T12:41:00Z"},
+		{NVDPolled: "2026-11-19T14:41:00Z"}, // unreadable state file: ignored
+		{NVDPolled: "garbage"},
+		{NVDPolled: "2026-11-19T13:00:00Z"},
+		{},
+	}
+	errs := []error{nil, errors.New("bad state"), nil, nil, nil}
+	want := time.Date(2026, 11, 19, 13, 0, 0, 0, time.UTC)
+	if got := lastNVDPoll(states, errs); !got.Equal(want) {
+		t.Errorf("lastNVDPoll = %s, want %s", got, want)
+	}
+}
+
+// A run where NVD is not due checks KEV only and leaves the NVD window, poll
+// time and broken state untouched. A due run records its poll time.
+func TestRunNVDNotDue(t *testing.T) {
+	now := time.Date(2026, 11, 19, 14, 41, 0, 0, time.UTC)
+	watch := filepath.Join(t.TempDir(), "w.txt")
+	os.WriteFile(watch, []byte("nginx\n"), 0o644)
+	st := &state{
+		Sent:      map[string]string{},
+		Broken:    map[string]string{"NVD": "2026-11-19T12:41:00Z"},
+		NVDSince:  "2026-11-19T10:00:00Z",
+		NVDPolled: "2026-11-19T13:41:00Z",
+	}
+	f := &fetched{now: now, nvdSkipped: true, kev: []kevEntry{
+		{CveID: "CVE-KEV", VendorProject: "F5", Product: "nginx"},
+	}}
+	var rep report
+	if err := run(config{watchFile: watch}, st, f, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.kevNew != 1 || st.Sent["kev:CVE-KEV"] == "" {
+		t.Errorf("KEV not checked on a not-due run: rep %+v, sent %v", rep, st.Sent)
+	}
+	if st.NVDSince != "2026-11-19T10:00:00Z" || st.NVDPolled != "2026-11-19T13:41:00Z" {
+		t.Errorf("not-due run changed NVD state: since %q, polled %q", st.NVDSince, st.NVDPolled)
+	}
+	if _, ok := st.Broken["NVD"]; !ok {
+		t.Errorf("not-due run cleared NVD broken state: %v", st.Broken)
+	}
+
+	f = &fetched{now: now}
+	if err := run(config{watchFile: watch}, st, f, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if st.NVDPolled != now.Format(time.RFC3339) || st.NVDSince != now.Format(time.RFC3339) {
+		t.Errorf("due run: polled %q, since %q, want both %s", st.NVDPolled, st.NVDSince, now.Format(time.RFC3339))
+	}
+	if _, ok := st.Broken["NVD"]; ok {
+		t.Errorf("due run with NVD data did not clear NVD broken state: %v", st.Broken)
+	}
+}
+
 // Profiles watching the same word share one CVE.org lookup per run, failed
 // lookups included.
 func TestCVEOrgCache(t *testing.T) {

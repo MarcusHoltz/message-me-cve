@@ -2,11 +2,12 @@ name: message-me-cve
 
 # One job checks every profiles/<name>.txt against one fetch of KEV and NVD.
 # NVD: poll for changes no more than once every two hours, from one requestor.
-# Every 2 h, 12:xx to 22:xx UTC. The minute is a random prime written by
-# schedule.sh; do not edit it by hand.
+# Every hour, 12:xx to 22:xx UTC; the program skips NVD when it was polled
+# under 2 h ago, so late or bunched runs stay within the NVD rule. The
+# minute is a random prime written by schedule.sh; do not edit it by hand.
 on:
   schedule:
-    - cron: '41 12,14,16,18,20,22 * * *'
+    - cron: '41 12-22 * * *'
   workflow_dispatch:
 
 permissions:

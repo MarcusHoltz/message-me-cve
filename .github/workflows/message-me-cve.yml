@@ -3,7 +3,7 @@ name: message-me-cve
 # One job checks every profiles/<name>.txt against one fetch of KEV and NVD.
 # NVD: poll for changes no more than once every two hours, from one requestor.
 # Every 2 h, 05:xx to 15:xx Mountain. The minute is a random prime written by
-# schedule.sh; do not edit it by hand.
+# schedule.sh; do not edit it by hand. 
 on:
   schedule:
     - cron: '41 5,7,9,11,13,15 * * *'

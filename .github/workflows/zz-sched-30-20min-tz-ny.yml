@@ -1,0 +1,12 @@
+name: zz-30-20min-tz-ny
+
+on:
+  schedule:
+    - cron: '*/20 * * * *'
+      timezone: "America/New_York"
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

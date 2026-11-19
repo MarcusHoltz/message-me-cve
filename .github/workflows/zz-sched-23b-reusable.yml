@@ -1,0 +1,10 @@
+name: zz-23b-reusable
+
+on:
+  workflow_call:
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

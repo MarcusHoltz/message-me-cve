@@ -1,0 +1,12 @@
+name: zz-18-two-entries
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+    - cron: '*/7 * * * *'
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

@@ -1,0 +1,11 @@
+name: zz-08-offset-step-utc
+
+on:
+  schedule:
+    - cron: '3/5 * * * *'
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

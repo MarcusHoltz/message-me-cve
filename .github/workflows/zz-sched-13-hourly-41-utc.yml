@@ -1,0 +1,11 @@
+name: zz-13-hourly-41-utc
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

@@ -1,0 +1,11 @@
+name: zz-06-10min-utc
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

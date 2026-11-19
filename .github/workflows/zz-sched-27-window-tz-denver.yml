@@ -1,0 +1,12 @@
+name: zz-27-window-tz-denver
+
+on:
+  schedule:
+    - cron: '*/5 8-20 * * *'
+      timezone: "America/Denver"
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

@@ -1,0 +1,10 @@
+name: zz-23-caller
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+      timezone: "America/Denver"
+
+jobs:
+  t:
+    uses: ./.github/workflows/zz-sched-23b-reusable.yml

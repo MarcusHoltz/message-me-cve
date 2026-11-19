@@ -1,0 +1,12 @@
+name: zz-05-5min-tz-etc-utc
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+      timezone: "Etc/UTC"
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

@@ -1,0 +1,12 @@
+name: zz-16-prod-cron-tz-denver
+
+on:
+  schedule:
+    - cron: '41 5,7,9,11,13,15 * * *'
+      timezone: "America/Denver"
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "event=$GITHUB_EVENT_NAME at $(date -u +%T)"

@@ -143,8 +143,11 @@ Public repos are free.
 
 ### Schedule
 
-Every 2 hours from 05:xx to 15:xx Mountain time (MST/MDT), 6 runs a day,
-none at night.
+Every 2 hours from 12:xx to 22:xx UTC, 6 runs a day, none at night.
+That is 05:xx to 15:xx MST in winter and 06:xx to 16:xx MDT in summer.
+
+- **Why UTC:** the workflow's `timezone` key (GitHub Public Preview)
+  produced zero scheduled runs on this repo. Plain UTC cron replaced it.
 
 - **Why 2 hours:** NVD asks clients to poll for changes "no more than once
   every two hours", from a single requestor. Manual runs count too.
@@ -156,10 +159,10 @@ none at night.
 - **Late or dropped runs:** GitHub may start scheduled runs late (minutes,
   sometimes more), and under high load may drop them. A late run can
   shorten one gap below 2 hours.
-- **Other hours or time zone:** edit `cron` and `timezone` in
-  `.github/workflows/message-me-cve.yml`. Keep the runs 2 hours apart.
-  `schedule.sh` only recognizes the hour list `5,7,9,11,13,15`; change it
-  too, or it stops with `cron line not found`.
+- **Other hours:** edit `cron` in `.github/workflows/message-me-cve.yml`.
+  Hours are UTC. Keep the runs 2 hours apart. `schedule.sh` only
+  recognizes the hour list `12,14,16,18,20,22`; change it too, or it stops
+  with `cron line not found`.
 
 The workflow times out after 80 minutes. That leaves room for one 60
 minute round of NVD retries (see [How a run works](#how-a-run-works)).
